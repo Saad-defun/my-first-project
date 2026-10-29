@@ -19,6 +19,35 @@ def compare(source: dict, sample: dict, direction: str = "source_to_sample") -> 
     return _diff(drawings, *DIRECTIONS[direction])
 
 
+def diff(a: dict, b: dict, base: str, target: str) -> dict:
+    """Compare any two summaries under the given names, e.g. "before" and "after"."""
+    return _diff({base: a, target: b}, base, target)
+
+
+def diff_keys(report: dict) -> set[str]:
+    """Flatten a report into keys like "layers/add/WALL" or "entities_by_layer/WALL",
+    the same whichever names the two drawings had, so reports can be matched up."""
+    keys = set()
+    for section in ("layers", "blocks", *NAME_SECTIONS):
+        for label, items in report[section].items():
+            kind = label.split(" ")[0]  # add / remove / changed / references
+            if section == "layers" and kind == "changed":
+                keys.update(f"layers/changed/{name}/{p}" for name, props in items.items() for p in props)
+            else:
+                keys.update(f"{section}/{kind}/{name}" for name in items)
+    for section in COUNT_SECTIONS:
+        keys.update(f"{section}/{k}" for k in report[section])
+    return keys
+
+
+def involved(report: dict) -> dict:
+    """Layers and blocks a source → sample report says the processing touches."""
+    layers = {name for items in report["layers"].values() for name in items}
+    layers |= set(report["entities_by_layer"])
+    blocks = {name for items in report["blocks"].values() for name in items}
+    return {"layers": sorted(layers), "blocks": sorted(blocks)}
+
+
 def _diff(drawings: dict, base: str, target: str) -> dict:
     """Differences for turning the `base` drawing into the `target` drawing."""
     a, b = drawings[base], drawings[target]
