@@ -163,19 +163,19 @@ class Page(QWidget):
     # Shortcuts to the job chosen on the Job tab
 
     def backend(self):
-        return BACKENDS[self.main.job.backend.currentText()]
+        return BACKENDS[self.main.job.backend_box.currentText()]
 
     def folder(self) -> str:
-        folder = self.main.job.folder.text().strip()
+        folder = self.main.job.folder_edit.text().strip()
         if not folder:
             raise ValueError("choose the source folder on the Job tab first")
         return folder
 
     def source(self) -> str:
-        return self._drawing(self.main.job.source, "source")
+        return self._drawing(self.main.job.source_box, "source")
 
     def sample(self) -> str:
-        return self._drawing(self.main.job.sample, "sample")
+        return self._drawing(self.main.job.sample_box, "sample")
 
     def _drawing(self, combo: QComboBox, what: str) -> str:
         name = combo.currentText().strip()
@@ -206,25 +206,25 @@ class Page(QWidget):
 class JobPage(Page):
     def __init__(self, main):
         super().__init__(main)
-        self.folder = QLineEdit()
-        self.folder.setPlaceholderText("folder holding the source and sample drawings")
+        self.folder_edit = QLineEdit()
+        self.folder_edit.setPlaceholderText("folder holding the source and sample drawings")
         browse = QPushButton("Browse…")
         browse.clicked.connect(self._browse)
-        self.folder.editingFinished.connect(self.refresh)
+        self.folder_edit.editingFinished.connect(self.refresh)
         row = QHBoxLayout()
-        row.addWidget(self.folder)
+        row.addWidget(self.folder_edit)
         row.addWidget(browse)
-        self.source, self.sample = QComboBox(), QComboBox()
-        self.backend = QComboBox()
-        self.backend.addItems(sorted(BACKENDS))
+        self.source_box, self.sample_box = QComboBox(), QComboBox()
+        self.backend_box = QComboBox()
+        self.backend_box.addItems(sorted(BACKENDS))
         self.check = QPushButton("Check connection")
         self.check.clicked.connect(self._check)
 
         form = QFormLayout()
         form.addRow("Source folder", row)
-        form.addRow("Source drawing", self.source)
-        form.addRow("Sample drawing", self.sample)
-        form.addRow("Backend", self.backend)
+        form.addRow("Source drawing", self.source_box)
+        form.addRow("Sample drawing", self.sample_box)
+        form.addRow("Backend", self.backend_box)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(QLabel("com works on drawings open in AutoCAD / Civil 3D; ezdxf works on DXF files "
@@ -233,16 +233,16 @@ class JobPage(Page):
         layout.addWidget(self.view)
 
     def _browse(self):
-        d = QFileDialog.getExistingDirectory(self, "Source folder", self.folder.text())
+        d = QFileDialog.getExistingDirectory(self, "Source folder", self.folder_edit.text())
         if d:
-            self.folder.setText(d)
+            self.folder_edit.setText(d)
             self.refresh()
 
     def refresh(self):
-        names = _drawings(self.folder.text().strip())
-        self.fill(self.source, names)
-        self.fill(self.sample, names)
-        for combo, word in ((self.source, "source"), (self.sample, "sample")):
+        names = _drawings(self.folder_edit.text().strip())
+        self.fill(self.source_box, names)
+        self.fill(self.sample_box, names)
+        for combo, word in ((self.source_box, "source"), (self.sample_box, "sample")):
             match = next((n for n in names if word in n.lower()), None)
             if match and combo.currentIndex() <= 0:
                 combo.setCurrentText(match)
@@ -251,7 +251,7 @@ class JobPage(Page):
         b = self.backend()
         path = None
         if b.name == "ezdxf":
-            path = self.source() if self.source.currentText() else None
+            path = self.source() if self.source_box.currentText() else None
             if not path:
                 self.view.show_error("ezdxf needs a source drawing (a DXF) to check")
                 return
@@ -432,7 +432,7 @@ class RecipePage(Page):
         except Exception:
             items = []
         self.fill(self.drawing, items)
-        src = self.main.job.source.currentText()
+        src = self.main.job.source_box.currentText()
         if src in items and self.drawing.currentIndex() <= 0:
             self.drawing.setCurrentText(src)
 
@@ -535,7 +535,7 @@ class RunPage(Page):
             self.fill(self.drawing, _drawings(self.folder()))
         except Exception:
             self.fill(self.drawing, [])
-        src = self.main.job.source.currentText()
+        src = self.main.job.source_box.currentText()
         if src and self.drawing.currentIndex() <= 0:
             self.drawing.setCurrentText(src)
 
