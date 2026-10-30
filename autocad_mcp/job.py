@@ -14,6 +14,8 @@ import re
 import shutil
 import time
 
+import settings
+
 SUBFOLDERS = ("lisp", "test", "recipe", "shop")
 LISP_DIR_ENV = "AUTOCAD_MCP_LISP_DIR"
 
@@ -42,10 +44,12 @@ def inside(path: str, folder: str) -> bool:
 
 
 def lisp_dir() -> str:
-    """AutoCAD's trusted LISP folder, the only place routines are loaded from."""
-    d = os.environ.get(LISP_DIR_ENV)
+    """AutoCAD's trusted LISP folder, the only place routines are loaded from:
+    AUTOCAD_MCP_LISP_DIR if set, otherwise lisp_dir in settings.ini."""
+    d = os.environ.get(LISP_DIR_ENV) or settings.get("lisp_dir")
     if not d:
-        raise RuntimeError(f"Set {LISP_DIR_ENV} to AutoCAD's trusted LISP folder")
+        raise RuntimeError(f"Set lisp_dir in {settings.path()} (or {LISP_DIR_ENV}) "
+                           "to AutoCAD's trusted LISP folder")
     d = os.path.abspath(d)
     if not os.path.isdir(d):
         raise RuntimeError(f"{LISP_DIR_ENV} folder does not exist: {d}")

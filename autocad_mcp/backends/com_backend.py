@@ -1,15 +1,26 @@
-"""COM backend: drives the AutoCAD 2018 session that is already running (Windows only)."""
+"""COM backend: drives the AutoCAD or Civil 3D session (2018 to 2026) that is already
+running (Windows only). Which product and version it attaches to comes from settings.ini."""
 import os
 import re
 import time
 from collections import Counter
 
+import settings
+
 from .base import Backend, summary
 from .selection import matches, part_keep
 
-PROG_ID = "AutoCAD.Application.22"  # AutoCAD 2018
-AC_2018_DWG = 64  # AcSaveAsType.ac2018_dwg
-AC_2018_DXF = 65  # AcSaveAsType.ac2018_dxf
+# Release year -> COM version of AutoCAD (Civil 3D runs on the same AutoCAD)
+RELEASES = {
+    "2018": "22.0", "2019": "23.0", "2020": "23.1", "2021": "24.0", "2022": "24.1",
+    "2023": "24.2", "2024": "24.3", "2025": "25.0", "2026": "25.1",
+}
+# AcSaveAsType values: (dwg, dxf) per file format
+SAVE_TYPES = {
+    "2018": (64, 65), "2013": (60, 61), "2010": (48, 49),
+    "2007": (36, 37), "2004": (24, 25), "2000": (12, 13),
+}
+AC_2018_DWG, AC_2018_DXF = SAVE_TYPES["2018"]
 RPC_E_CALL_REJECTED = -2147418111  # AutoCAD is busy
 NAME_RE = r"[A-Za-z0-9_\-]+"
 
@@ -106,10 +117,38 @@ class ComBackend(Backend):
         except ImportError as e:
             raise RuntimeError("COM backend needs Windows with pywin32 installed") from e
         pythoncom.CoInitialize()
+        cfg = settings.load()
+        version, product = cfg["version"], cfg["product"]
+        wanted = f"{product if product != 'any' else 'AutoCAD or Civil 3D'} {version if version != 'any' else ''}".strip()
+        prog_id = "AutoCAD.Application" if version == "any" else f"AutoCAD.Application.{RELEASES[version].split('.')[0]}"
         try:
-            return win32com.client.GetActiveObject(PROG_ID)
+            app = win32com.client.GetActiveObject(prog_id)
         except Exception as e:
-            raise RuntimeError("AutoCAD 2018 is not running") from e
+            raise RuntimeError(f"{wanted} is not running (settings: {settings.path()})") from e
+        info = self._identify(app)
+        if version != "any" and info["version"] != version:
+            raise RuntimeError(f"settings ask for {wanted}, but the running one is {info['product']} {info['version']}")
+        if product != "any" and info["product"] != product:
+            raise RuntimeError(f"settings ask for {wanted}, but the running one is {info['product']} {info['version']}")
+        return app
+
+    @staticmethod
+    def _identify(app) -> dict:
+        """Product and release year of a running AutoCAD. Civil 3D runs on AutoCAD, so it is
+        told apart by its window title."""
+        raw = _retry(lambda: app.Version)  # e.g. "24.3s (LMS Tech)"
+        m = re.match(r"(\d+\.\d+)", raw)
+        year = next((y for y, v in RELEASES.items() if m and v == m.group(1)), f"unknown ({raw})")
+        try:
+            caption = _retry(lambda: app.Caption)
+        except Exception:
+            caption = ""
+        return {"product": "Civil 3D" if "civil 3d" in caption.lower() else "AutoCAD",
+                "version": year, "com_version": raw}
+
+    def cad_info(self) -> dict:
+        """Which product and version this backend is connected to."""
+        return self._identify(self._app())
 
     def _doc(self):
         app = self._app()
@@ -158,7 +197,7 @@ class ComBackend(Backend):
         app = self._app()
         return {
             "backend": self.name,
-            "autocad_version": _retry(lambda: app.Version),
+            **self._identify(app),
             "open_drawings": self.open_documents(),
         }
 
@@ -218,14 +257,15 @@ class ComBackend(Backend):
         self._wait_idle(doc)
         return doc
 
-    def save(self, path: str, as_dwg: bool = False) -> str:
-        """Save the open drawing at `path` (DXF stays DXF R2018, otherwise DWG 2018).
-        as_dwg saves it as a DWG 2018 beside it instead and returns the new path."""
+    def save(self, path: str, as_dwg: bool = False, file_format: str = "2018") -> str:
+        """Save the open drawing at `path` in the given format (DXF stays DXF, otherwise DWG).
+        as_dwg saves it as a DWG beside it instead and returns the new path."""
         doc = self._find_doc(path)
         target = os.path.abspath(path)
         if as_dwg:
             target = os.path.splitext(target)[0] + ".dwg"
-        fmt = AC_2018_DXF if target.lower().endswith(".dxf") else AC_2018_DWG
+        dwg, dxf = SAVE_TYPES[file_format]
+        fmt = dxf if target.lower().endswith(".dxf") else dwg
         _retry(lambda: doc.SaveAs(target, fmt))
         return target
 

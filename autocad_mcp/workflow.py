@@ -8,6 +8,7 @@ import shutil
 
 import job
 import recipe as recipes
+import settings
 from compare import compare, diff, diff_keys, involved
 
 COMMAND_RE = r"[A-Za-z0-9_\-]+"
@@ -93,6 +94,7 @@ def test_routine(b, source_folder: str, copy: str, routine: str, command: str, a
         "sha256": job.file_hash(file),
         "copy": copy,
         "sample": job.resolve(source_folder, sample) if sample else None,
+        "cad": com.cad_info(),
         "started": job.now(),
     }
     checks = report["checks"] = {}
@@ -207,11 +209,17 @@ def run_recipe(b, source_folder: str, name: str, drawing: str, mode: str = "test
     if errors:
         raise ValueError("recipe is invalid: " + "; ".join(errors))
     changed = recipes.hash_changes(r)
+    cad = com.cad_info()
+    warnings = []
     if mode == "full":
         if r.get("status") != "approved":
             raise RuntimeError(f"recipe {name!r} is {r.get('status')}; test it and have it approved first")
         if changed:
             raise RuntimeError(f"routines changed since approval: {changed}; test the recipe again and re-approve")
+        tested_on = (r.get("approved") or {}).get("cad")
+        if tested_on and (tested_on["product"], tested_on["version"]) != (cad["product"], cad["version"]):
+            warnings.append(f"recipe was tested on {tested_on['product']} {tested_on['version']}, "
+                            f"this run is on {cad['product']} {cad['version']}")
 
     src = job.resolve(source_folder, drawing)
     if not os.path.isfile(src):
@@ -248,7 +256,10 @@ def run_recipe(b, source_folder: str, name: str, drawing: str, mode: str = "test
             entry["error"] = str(e)
         steps.append(entry)
 
-    saved = com.save(out, as_dwg=(mode == "full"))
+    if mode == "full":
+        saved = com.save(out, as_dwg=True, file_format=settings.get("save_format"))
+    else:
+        saved = com.save(out)
     if os.path.normcase(saved) != os.path.normcase(out):
         try:
             os.remove(out)  # the DXF work copy, now saved as DWG
@@ -260,6 +271,8 @@ def run_recipe(b, source_folder: str, name: str, drawing: str, mode: str = "test
         "recipe_status": r.get("status"),
         "drawing": src,
         "output": saved,
+        "cad": cad,
+        "warnings": warnings,
         "ran": job.now(),
         "steps": steps,
         "steps_failed": [s["step"] for s in steps if not s["ok"]],
@@ -282,7 +295,8 @@ def run_recipe(b, source_folder: str, name: str, drawing: str, mode: str = "test
         r["status"] = "tested"
         r["last_test"] = {"at": report["ran"], "report": report["report_file"],
                           "steps_failed": report["steps_failed"],
-                          "matches_sample": report.get("matches_sample")}
+                          "matches_sample": report.get("matches_sample"),
+                          "cad": cad}
         recipes.save(source_folder, name, r)
     report["note"] = "the result is left open in AutoCAD for review"
     return report
@@ -301,7 +315,7 @@ def approve_recipe(source_folder: str, name: str, approved_by: str) -> dict:
         raise RuntimeError(f"routines missing from the trusted folder: {missing}")
     last = r.get("last_test") or {}
     r["status"] = "approved"
-    r["approved"] = {"by": approved_by, "at": job.now(), "hashes": hashes,
+    r["approved"] = {"by": approved_by, "at": job.now(), "hashes": hashes, "cad": last.get("cad"),
                      "open_flags": {"steps_failed": last.get("steps_failed", []),
                                     "matches_sample": last.get("matches_sample")}}
     recipes.save(source_folder, name, r)

@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+settings.ini
+build/
+dist/
+*.spec
+*.bundle

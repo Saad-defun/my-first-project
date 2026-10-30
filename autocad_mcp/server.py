@@ -30,7 +30,8 @@ def _com_only(name: str, tool: str):
 
 @mcp.tool()
 def backend_status(backend: BackendName, path: str | None = None) -> dict:
-    """Check a backend is usable. com: reports the running AutoCAD 2018 session.
+    """Check a backend is usable. com: reports the running AutoCAD or Civil 3D (product and
+    version must match settings.ini) and its open drawings.
     ezdxf: needs `path` to a DXF file and reports its version and entity count."""
     return _backend(backend).status(path)
 
@@ -79,7 +80,7 @@ def open_in_autocad(backend: BackendName, path: str) -> str:
 
 @mcp.tool()
 def load_lisp(backend: BackendName, path: str) -> str:
-    """Load a .lsp file from AutoCAD's trusted LISP folder (AUTOCAD_MCP_LISP_DIR) into the
+    """Load a .lsp file from AutoCAD's trusted LISP folder (lisp_dir in settings.ini) into the
     active drawing. `path` is relative to that folder; files outside it are refused. com only."""
     return _com_only(backend, "load_lisp").load_lisp(job.routine_path(path))
 
