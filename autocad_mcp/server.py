@@ -4,7 +4,7 @@ from typing import Literal
 from mcp.server.fastmcp import FastMCP
 
 import job
-import workflow
+import cad_workflow as workflow  # not "workflow": PyInstaller has a hook for a package of that name
 from backends import BACKENDS
 from compare import compare
 

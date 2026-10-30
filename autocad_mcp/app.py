@@ -15,8 +15,10 @@ def _hide_own_console():
         import ctypes
 
         kernel32 = ctypes.windll.kernel32
-        processes = (ctypes.c_uint * 2)()
-        if kernel32.GetConsoleProcessList(processes, 2) == 1:
+        processes = (ctypes.c_uint * 8)()
+        # A one-file exe runs as two processes (unpacker + program), both on the console
+        own = 2 if getattr(sys, "frozen", False) else 1
+        if kernel32.GetConsoleProcessList(processes, 8) <= own:
             ctypes.windll.user32.ShowWindow(kernel32.GetConsoleWindow(), 0)
     except Exception:
         pass

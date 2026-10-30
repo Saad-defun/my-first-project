@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 
 import job
 import settings
-import workflow
+import cad_workflow as workflow
 from backends import BACKENDS
 from compare import compare
 

@@ -6,7 +6,7 @@ cd /d "%~dp0"
 python -m PyInstaller --noconfirm --clean --onefile --console --name AItoCAD ^
   --paths . ^
   --collect-submodules ezdxf ^
-  --collect-submodules mcp ^
+  --collect-submodules mcp.server --exclude-module mcp.cli ^
   --hidden-import win32com.client --hidden-import pythoncom --hidden-import pywintypes ^
   --hidden-import server --hidden-import ui.window ^
   --exclude-module PySide6.QtWebEngineCore --exclude-module PySide6.QtWebEngineWidgets ^
