@@ -178,7 +178,8 @@ class ComBackend(Backend):
         try:
             self._wait_idle(doc, timeout)
         except TimeoutError:
-            _retry(lambda: doc.SendCommand("\x03\x03"))  # cancel, so AutoCAD is usable again
+            # Esc twice cancels the command (not Ctrl+C, which is COPYCLIP in AutoCAD)
+            _retry(lambda: doc.SendCommand("\x1b\x1b"))
             raise
 
     def open_documents(self) -> list[str]:
