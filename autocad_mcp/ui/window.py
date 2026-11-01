@@ -8,7 +8,7 @@ import yaml
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
+    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
     QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
     QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
@@ -188,8 +188,10 @@ class Page(QWidget):
 
     def recipe_names(self) -> list[str]:
         try:
-            folder = job.sub(self.folder(), "recipe")
+            folder = job.sub(self.folder(), "recipe", create=False)
         except Exception:
+            return []
+        if not os.path.isdir(folder):
             return []
         return sorted(os.path.splitext(f)[0] for f in os.listdir(folder) if f.endswith(".yaml"))
 
@@ -343,7 +345,7 @@ class TestPage(Page):
 
     def refresh(self):
         try:
-            self.fill(self.copy, _drawings(job.sub(self.folder(), "test")))
+            self.fill(self.copy, _drawings(job.sub(self.folder(), "test", create=False)))
         except Exception:
             self.fill(self.copy, [])
         try:
@@ -373,7 +375,7 @@ class TestPage(Page):
         if not self.copy.currentText():
             self.view.show_error("make a test copy first")
             return
-        copy = os.path.join(job.sub(folder, "test"), self.copy.currentText())
+        copy = os.path.join(job.sub(folder, "test", create=False), self.copy.currentText())
         sample = self.sample() if self.use_sample.isChecked() else None
         routine, command = self.routine.currentText().strip(), self.command.text().strip()
         answers = self.answers.toPlainText().splitlines() or None
@@ -428,7 +430,7 @@ class RecipePage(Page):
         self.fill(self.name, self.recipe_names())
         try:
             folder = self.folder()
-            items = _drawings(folder) + [f"test/{n}" for n in _drawings(job.sub(folder, "test"))]
+            items = _drawings(folder) + [f"test/{n}" for n in _drawings(job.sub(folder, "test", create=False))]
         except Exception:
             items = []
         self.fill(self.drawing, items)
@@ -577,14 +579,14 @@ class ClosePage(Page):
     def refresh(self):
         self.fill(self.name, self.recipe_names())
         try:
-            self.fill(self.shop, _drawings(job.sub(self.folder(), "shop")))
+            self.fill(self.shop, _drawings(job.sub(self.folder(), "shop", create=False)))
         except Exception:
             self.fill(self.shop, [])
 
     def _shop_path(self) -> str:
         if not self.shop.currentText():
             raise ValueError("no shop drawing in shop/ yet; do a full run first")
-        return os.path.join(job.sub(self.folder(), "shop"), self.shop.currentText())
+        return os.path.join(job.sub(self.folder(), "shop", create=False), self.shop.currentText())
 
     def _check(self):
         b, shop, sample = self.backend(), self._shop_path(), self.sample()
@@ -620,6 +622,9 @@ class SettingsPage(Page):
         self.timeout_box = QDoubleSpinBox()
         self.timeout_box.setRange(1, 3600)
         self.timeout_box.setSuffix(" s")
+        self.work_subfolder = QLineEdit()
+        self.work_subfolder.setPlaceholderText("folder inside each job folder that the tools write into")
+        self.tag_pattern = QLineEdit()
         self.go = QPushButton("Save settings")
         self.go.clicked.connect(self._save)
         form = QFormLayout()
@@ -628,17 +633,31 @@ class SettingsPage(Page):
         form.addRow("Version", self.version)
         form.addRow("Shop drawing format", self.save_format)
         form.addRow("Command time limit", self.timeout_box)
+        form.addRow("Work subfolder", self.work_subfolder)
+        form.addRow("Tag layers", self.tag_pattern)
         self.mcp = QPlainTextEdit()
         self.mcp.setReadOnly(True)
         self.mcp.setMaximumHeight(140)
+        copy_prompt = QPushButton("Copy system prompt (for LM Studio)")
+        copy_prompt.clicked.connect(self._copy_prompt)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(self.go)
         layout.addWidget(QLabel(f"Settings file: {settings.path()}"))
         layout.addWidget(QLabel("To use this program as the MCP server for Claude Desktop / Claude Code:"))
         layout.addWidget(self.mcp)
+        layout.addWidget(copy_prompt)
         layout.addWidget(self.view)
         self.refresh()
+
+    def _copy_prompt(self):
+        try:
+            text = settings.system_prompt()
+        except Exception as e:
+            self.view.show_error(str(e))
+            return
+        QApplication.clipboard().setText(text)
+        self.view.show_result({"copied": "system prompt", "characters": len(text)})
 
     def refresh(self):
         s = settings.load()
@@ -647,6 +666,8 @@ class SettingsPage(Page):
         self.version.setCurrentText(s["version"])
         self.save_format.setCurrentText(s["save_format"])
         self.timeout_box.setValue(float(s["timeout"]))
+        self.work_subfolder.setText(s["work_subfolder"])
+        self.tag_pattern.setText(s["tag_layer_pattern"])
         exe = sys.executable if getattr(sys, "frozen", False) else f"{sys.executable} {os.path.abspath(sys.argv[0])}"
         cmd = exe.replace("\\", "\\\\")
         self.mcp.setPlainText(
@@ -669,6 +690,8 @@ class SettingsPage(Page):
                 "version": self.version.currentText(),
                 "save_format": self.save_format.currentText(),
                 "timeout": self.timeout_box.value(),
+                "work_subfolder": self.work_subfolder.text().strip(),
+                "tag_layer_pattern": self.tag_pattern.text().strip(),
             })
         except Exception as e:
             self.view.show_error(str(e))

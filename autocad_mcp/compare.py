@@ -1,5 +1,9 @@
 """Compare two drawing summaries (from inspect) and report the differences
-using the words source and sample."""
+using the words source and sample. Counts and names are given exactly, so a model reading
+the report never has to count or retype a name."""
+from collections import Counter
+
+from entities import name_matches
 
 DIRECTIONS = {
     "source_to_sample": ("source", "sample"),
@@ -8,15 +12,91 @@ DIRECTIONS = {
 
 NAME_SECTIONS = ("text_styles", "dim_styles", "linetypes")
 COUNT_SECTIONS = ("entities_by_layer", "entities_by_type")
+XREF_BOUND = "$0$"  # AutoCAD names bound xref layers "<xref>$0$<name>"
+TEXT_LIST_LIMIT = 30  # texts listed per layer and side; the exact count is always given
 
 
-def compare(source: dict, sample: dict, direction: str = "source_to_sample") -> dict:
-    drawings = {"source": source, "sample": sample}
+def _pairs(direction: str) -> list[tuple[str, str]]:
     if direction == "both":
-        return {f"{a} → {b}": _diff(drawings, a, b) for a, b in DIRECTIONS.values()}
+        return list(DIRECTIONS.values())
     if direction not in DIRECTIONS:
         raise ValueError(f"direction must be one of {[*DIRECTIONS, 'both']}, got {direction!r}")
-    return _diff(drawings, *DIRECTIONS[direction])
+    return [DIRECTIONS[direction]]
+
+
+def compare(source: dict, sample: dict, direction: str = "source_to_sample",
+            tag_pattern: str | None = None) -> dict:
+    drawings = {"source": source, "sample": sample}
+    reports = {f"{a} → {b}": _with_counts(drawings, a, b, tag_pattern) for a, b in _pairs(direction)}
+    return reports if direction == "both" else next(iter(reports.values()))
+
+
+def _with_counts(drawings: dict, base: str, target: str, tag_pattern: str | None) -> dict:
+    """The full difference report, led by exact counts, the tag layers and the xref-bound
+    layers with the plain name each one maps to."""
+    a, b = drawings[base], drawings[target]
+    report = _diff(drawings, base, target)
+    counts = {}
+    for section in ("layers", "blocks", *NAME_SECTIONS):
+        n = {label.split(" ")[0]: len(items) for label, items in report[section].items()}
+        counts[section] = {k: v for k, v in n.items() if v}
+    counts.update({s: len(report[s]) for s in COUNT_SECTIONS})
+    lead = {"summary": report.pop("summary"), "counts": counts}
+    if tag_pattern:
+        tags = {side: sorted(la for la in d["layers"] if name_matches(la, tag_pattern))
+                for side, d in ((base, a), (target, b))}
+        lead["tag_layers"] = {"pattern": tag_pattern,
+                              "count": {side: len(v) for side, v in tags.items()}, **tags}
+    bound = sorted({la for d in (a, b) for la, n in d["entities_by_layer"].items() if n and XREF_BOUND in la})
+    if bound:
+        lead["xref_bound_layers"] = {
+            la: {"plain_name": la.split(XREF_BOUND)[-1],
+                 "objects": {base: a["entities_by_layer"].get(la, 0), target: b["entities_by_layer"].get(la, 0)}}
+            for la in bound
+        }
+    return {**lead, **report}
+
+
+def compare_text(source: list[dict], sample: list[dict], direction: str = "source_to_sample") -> dict:
+    """Compare the text of objects (records from list_entities) layer by layer: which texts
+    are only in one drawing, and exact counts. Texts are compared whole, as written."""
+    drawings = {"source": source, "sample": sample}
+    reports = {f"{a} → {b}": _text_diff(drawings[a], drawings[b], a, b) for a, b in _pairs(direction)}
+    return reports if direction == "both" else next(iter(reports.values()))
+
+
+def _texts(records: list[dict]) -> dict[str, Counter]:
+    out = {}
+    for r in records:
+        text = r.get("text")
+        if text is None and r.get("attribs"):
+            text = " | ".join(f"{k}={v}" for k, v in r["attribs"].items())
+        if text is not None:
+            out.setdefault(r["layer"], Counter())[text] += 1
+    return out
+
+
+def _text_diff(a: list[dict], b: list[dict], base: str, target: str) -> dict:
+    ta, tb = _texts(a), _texts(b)
+    layers, differ = {}, 0
+    for la in sorted(set(ta) | set(tb)):
+        x, y = ta.get(la, Counter()), tb.get(la, Counter())
+        only_b, only_a = sorted((y - x).elements()), sorted((x - y).elements())
+        entry = {"count": {base: sum(x.values()), target: sum(y.values())},
+                 "same": sum((x & y).values())}
+        for label, items in ((f"only in {target}", only_b), (f"only in {base}", only_a)):
+            if items:
+                entry[label] = items[:TEXT_LIST_LIMIT]
+                if len(items) > TEXT_LIST_LIMIT:
+                    entry[label + " (total)"] = len(items)
+        if only_a or only_b:
+            differ += 1
+        layers[la] = entry
+    return {
+        "summary": f"{len(layers)} layers with text, {differ} differ ({base} → {target})",
+        "direction": f"{base} → {target}",
+        "layers": layers,
+    }
 
 
 def diff(a: dict, b: dict, base: str, target: str) -> dict:

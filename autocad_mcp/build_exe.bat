@@ -9,6 +9,7 @@ python -m PyInstaller --noconfirm --clean --onefile --console --name AItoCAD ^
   --collect-submodules mcp.server --exclude-module mcp.cli ^
   --hidden-import win32com.client --hidden-import pythoncom --hidden-import pywintypes ^
   --hidden-import server --hidden-import ui.window ^
+  --add-data "..\prompts\system-prompt.md;prompts" ^
   --exclude-module PySide6.QtWebEngineCore --exclude-module PySide6.QtWebEngineWidgets ^
   --exclude-module PySide6.Qt3DCore --exclude-module PySide6.QtMultimedia ^
   --exclude-module PySide6.QtQuick --exclude-module PySide6.QtQml ^

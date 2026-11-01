@@ -1,11 +1,16 @@
 """The job folder (the source folder holding the source and sample drawings), the trusted
-LISP folder, and the record each job keeps of what it used.
+LISP folder, and the record each job keeps of what it used. The tools never write beside the
+drawings: everything goes in one work subfolder, created on first use.
 
     <source folder>/
-        lisp/     copies of the routines this job used, so it can be repeated later
-        test/     test copies and test reports
-        recipe/   the job's recipes
-        shop/     shop drawings and the reports of full runs
+        source / sample drawings          read only
+        AI work/                          (work_subfolder in settings.ini)
+            lisp/     copies of the routines this job used, so it can be repeated later
+            test/     test copies and test reports
+            recipe/   the job's recipes
+            shop/     shop drawings and the reports of full runs
+            drafts/   the model's own drafts, kept beside the user's corrected versions
+            job-summary.json / .md
 """
 import hashlib
 import json
@@ -16,7 +21,7 @@ import time
 
 import settings
 
-SUBFOLDERS = ("lisp", "test", "recipe", "shop")
+SUBFOLDERS = ("lisp", "test", "recipe", "shop", "drafts")
 LISP_DIR_ENV = "AUTOCAD_MCP_LISP_DIR"
 
 
@@ -99,22 +104,36 @@ def defun_clashes(path: str) -> dict:
 
 
 def folder(source_folder: str) -> str:
-    """The job's source folder, with its subfolders created."""
+    """The job's source folder (holding the source and sample). Nothing is created in it."""
     root = os.path.abspath(source_folder)
     if not os.path.isdir(root):
         raise FileNotFoundError(f"source folder does not exist: {root}")
-    for sub in SUBFOLDERS:
-        os.makedirs(os.path.join(root, sub), exist_ok=True)
     return root
 
 
-def sub(source_folder: str, name: str) -> str:
-    return os.path.join(folder(source_folder), name)
+def work(source_folder: str, create: bool = True) -> str:
+    """The job's work folder, <source folder>/<work_subfolder> ("AI work" by default), with
+    its subfolders. Everything the tools write goes here, never beside the drawings."""
+    root = os.path.join(folder(source_folder), settings.get("work_subfolder"))
+    if create:
+        for name in SUBFOLDERS:
+            os.makedirs(os.path.join(root, name), exist_ok=True)
+    return root
+
+
+def sub(source_folder: str, name: str, create: bool = True) -> str:
+    """A subfolder of the work folder. create=False only builds the path (for listings)."""
+    return os.path.join(work(source_folder, create), name)
 
 
 def resolve(source_folder: str, path: str) -> str:
-    """A drawing path; relative paths are taken from the source folder."""
-    return os.path.abspath(os.path.join(folder(source_folder), path))
+    """A drawing path. Relative paths are taken from the source folder, except those that
+    start with a work subfolder (e.g. "test/x.dwg"), which are taken from the work folder."""
+    if os.path.isabs(path):
+        return os.path.abspath(path)
+    first = path.replace("\\", "/").split("/")[0]
+    base = work(source_folder, create=False) if first in SUBFOLDERS else folder(source_folder)
+    return os.path.abspath(os.path.join(base, path))
 
 
 def record_routine(source_folder: str, path: str) -> dict:

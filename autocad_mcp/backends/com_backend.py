@@ -6,6 +6,7 @@ import time
 from collections import Counter
 
 import settings
+from entities import plain, record
 
 from .base import Backend, summary
 from .selection import matches, part_keep
@@ -91,6 +92,38 @@ def _bbox(e):
         return (lo[0], lo[1], hi[0], hi[1])
     except Exception:
         return None
+
+
+def _record(e) -> dict:
+    """Turn one COM object into the shared record: position, cleaned text, points."""
+    kind = COM_TO_DXF.get(e.ObjectName, e.ObjectName)
+    base = (e.Handle, kind, e.Layer)
+    box = _bbox(e)
+    centre = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2) if box else None
+    try:
+        if kind in ("TEXT", "ATTDEF", "MTEXT"):
+            return record(*base, e.InsertionPoint, plain(e.TextString))
+        if kind == "MULTILEADER":
+            if e.ContentType == 2:  # acMTextContent
+                return record(*base, centre, plain(e.TextString))
+            return record(*base, centre, content="block")
+        if kind == "INSERT":
+            attribs = {a.TagString: a.TextString for a in e.GetAttributes()} if e.HasAttributes else None
+            return record(*base, e.InsertionPoint, block=e.Name, attribs=attribs)
+        if kind == "LINE":
+            return record(*base, e.StartPoint, points=[e.StartPoint, e.EndPoint])
+        if kind == "LWPOLYLINE":
+            c = list(e.Coordinates)
+            pts = list(zip(c[0::2], c[1::2]))
+            return record(*base, pts[0] if pts else None, points=pts, closed=bool(e.Closed) or None)
+        if kind in ("CIRCLE", "ARC"):
+            return record(*base, e.Center, radius=round(e.Radius, 3))
+        if kind == "DIMENSION":
+            override = e.TextOverride
+            return record(*base, centre, override if override not in ("", "<>") else None)
+    except Exception:
+        pass
+    return record(*base, centre)
 
 
 def _retry(fn, timeout: float = 10.0):
@@ -233,6 +266,12 @@ class ComBackend(Backend):
             by_layer=by_layer,
             by_type=by_type,
         )
+
+    def entities(self, path: str | None = None) -> list[dict]:
+        """One record per model space object (see entities.record), same format as ezdxf."""
+        doc = self._find_doc(path)
+        self._wait_idle(doc)
+        return [_record(e) for e in doc.ModelSpace]
 
     def empty_attributes(self, path: str | None = None) -> dict:
         """Block name -> attribute tags left empty in its references (model space)."""

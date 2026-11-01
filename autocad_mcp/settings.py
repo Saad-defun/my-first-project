@@ -7,6 +7,8 @@ so the program stays portable. Created with the defaults on first use.
     version     = 2018 ... 2026 | any
     save_format = 2018 | 2013 | 2010 | 2007 | 2004 | 2000   (shop drawings)
     timeout     = seconds a command may wait before it is cancelled
+    work_subfolder    = folder inside each job folder that the tools write into ("AI work")
+    tag_layer_pattern = layers reported as tag layers by the comparison ("0. TAG *")
 """
 import configparser
 import os
@@ -22,6 +24,8 @@ DEFAULTS = {
     "version": "2018",
     "save_format": "2018",
     "timeout": "60",
+    "work_subfolder": "AI work",
+    "tag_layer_pattern": "0. TAG *",
 }
 
 
@@ -31,7 +35,7 @@ def path() -> str:
 
 
 def load() -> dict:
-    cfg = configparser.ConfigParser()
+    cfg = configparser.RawConfigParser()
     cfg[SECTION] = DEFAULTS
     if os.path.exists(path()):
         cfg.read(path(), encoding="utf-8")
@@ -41,11 +45,13 @@ def load() -> dict:
 
 
 def save(values: dict) -> str:
-    current = {**DEFAULTS, **{k: str(v) for k, v in values.items() if k in DEFAULTS}}
+    """Save the given values; settings not given keep their current value."""
+    base = load() if os.path.exists(path()) else DEFAULTS
+    current = {**base, **{k: str(v) for k, v in values.items() if k in DEFAULTS}}
     errors = validate(current)
     if errors:
         raise ValueError("; ".join(errors))
-    cfg = configparser.ConfigParser()
+    cfg = configparser.RawConfigParser()
     cfg[SECTION] = current
     with open(path(), "w", encoding="utf-8") as f:
         cfg.write(f)
@@ -65,8 +71,25 @@ def validate(values: dict) -> list[str]:
             raise ValueError
     except ValueError:
         errors.append("timeout must be a positive number of seconds")
+    sub = values["work_subfolder"].strip()
+    if not sub or any(c in sub for c in '\\/:*?"<>|') or sub in (".", ".."):
+        errors.append("work_subfolder must be a plain folder name")
+    if not values["tag_layer_pattern"].strip():
+        errors.append("tag_layer_pattern must not be empty")
     return errors
 
 
 def get(key: str) -> str:
     return load()[key]
+
+
+def system_prompt() -> str:
+    """The local model's system prompt (prompts/system-prompt.md, bundled into the exe):
+    the text after the first line that is just "---"."""
+    if getattr(sys, "frozen", False):
+        base = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+    else:
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(base, "prompts", "system-prompt.md"), encoding="utf-8") as f:
+        text = f.read()
+    return text.split("\n---\n", 1)[-1].strip()

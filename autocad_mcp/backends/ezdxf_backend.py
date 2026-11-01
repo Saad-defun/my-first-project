@@ -5,11 +5,52 @@ from collections import Counter
 import ezdxf
 from ezdxf import bbox
 
+from entities import plain, record
+
 from .base import Backend, summary
 from .com_backend import ComBackend
 from .selection import part_keep
 
 DXF_VERSION = "R2018"
+
+
+def _record(e) -> dict:
+    """Turn one ezdxf entity into the shared record: position, cleaned text, points."""
+    kind, dxf = e.dxftype(), e.dxf
+    base = (dxf.handle, kind, dxf.get("layer", "0"))
+    try:
+        if kind in ("TEXT", "ATTDEF"):
+            return record(*base, dxf.get("insert"), dxf.get("text", ""))
+        if kind == "MTEXT":
+            return record(*base, dxf.get("insert"), plain(e.text))
+        if kind == "MULTILEADER":
+            mtext = e.context.mtext
+            if mtext is not None:
+                return record(*base, mtext.insert, plain(mtext.default_content))
+            return record(*base, content="block")
+        if kind == "INSERT":
+            return record(*base, dxf.insert, block=dxf.name,
+                          attribs={a.dxf.tag: a.dxf.get("text", "") for a in e.attribs})
+        if kind == "LINE":
+            return record(*base, dxf.start, points=[dxf.start, dxf.end])
+        if kind == "LWPOLYLINE":
+            pts = [(x, y) for x, y, *_ in e.get_points()]
+            return record(*base, pts[0] if pts else None, points=pts, closed=e.closed or None)
+        if kind == "POLYLINE":
+            pts = [tuple(p) for p in e.points()]
+            return record(*base, pts[0] if pts else None, points=pts, closed=e.is_closed or None)
+        if kind in ("CIRCLE", "ARC"):
+            return record(*base, dxf.center, radius=round(dxf.radius, 3))
+        if kind == "DIMENSION":
+            override = dxf.get("text", "")
+            return record(*base, dxf.get("defpoint"),
+                          override if override not in ("", "<>") else None)
+        for attr in ("insert", "center", "start", "location"):
+            if dxf.hasattr(attr):
+                return record(*base, dxf.get(attr))
+    except Exception:
+        pass
+    return record(*base)
 
 
 class EzdxfBackend(Backend):
@@ -73,6 +114,12 @@ class EzdxfBackend(Backend):
             by_layer=by_layer,
             by_type=by_type,
         )
+
+    def entities(self, path: str | None = None) -> list[dict]:
+        """One record per model space object (see entities.record)."""
+        if not path:
+            raise ValueError("ezdxf backend needs a path to a DXF file")
+        return [_record(e) for e in self.load(path).modelspace()]
 
     def empty_attributes(self, path: str | None = None) -> dict:
         """Block name -> attribute tags left empty in its references (model space)."""

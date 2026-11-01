@@ -1,12 +1,17 @@
-"""AutoCAD MCP server. Every tool takes an explicit backend: "com" or "ezdxf"."""
+"""AutoCAD MCP server. Every drawing tool takes an explicit backend: "com" (live AutoCAD or
+Civil 3D) or "ezdxf" (DXF files, no AutoCAD). Tool descriptions are kept short and the input
+schemas trimmed, because a small local model reads all of them at the start of every chat."""
+import json
 from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 
-import job
 import cad_workflow as workflow  # not "workflow": PyInstaller has a hook for a package of that name
+import entities
+import job
+import settings
 from backends import BACKENDS
-from compare import compare
+from compare import compare, compare_text as text_report
 
 mcp = FastMCP("autocad")
 
@@ -28,89 +33,109 @@ def _com_only(name: str, tool: str):
     return BACKENDS["com"]
 
 
+def _records(b, path: str | None) -> list[dict]:
+    if b.name == "com" and path:
+        b.activate(path)
+    return b.entities(path)
+
+
+# Drawings
+
+
 @mcp.tool()
 def backend_status(backend: BackendName, path: str | None = None) -> dict:
-    """Check a backend is usable. com: reports the running AutoCAD or Civil 3D (product and
-    version must match settings.ini) and its open drawings.
-    ezdxf: needs `path` to a DXF file and reports its version and entity count."""
+    """com: the running AutoCAD/Civil 3D and its open drawings. ezdxf: a DXF file's version
+    and object count (path required)."""
     return _backend(backend).status(path)
-
-
-# Inspect and compare
 
 
 @mcp.tool()
 def inspect_drawing(backend: BackendName, path: str | None = None) -> dict:
-    """Summarise a drawing's model space: layers (color, linetype, on/frozen/locked),
-    blocks and their reference counts, text/dim styles, linetypes, and entity counts
-    per layer and per type. ezdxf: `path` to a DXF file is required. com: `path`
-    picks an open drawing; without it the active drawing is used."""
+    """Summary of a drawing's model space: layers, blocks, styles, object counts per layer
+    and type. ezdxf: path required. com: path picks an open drawing, else the active one."""
     return _backend(backend).inspect(path)
 
 
 @mcp.tool()
 def compare_drawings(backend: BackendName, source: str, sample: str,
                      direction: Direction = "source_to_sample") -> dict:
-    """Compare the source drawing with the sample drawing.
-    direction: "source_to_sample" (what to add/remove/change to turn the source into
-    the sample), "sample_to_source" (the reverse comparison), or "both".
-    com: both drawings must be open in AutoCAD."""
+    """Differences between source and sample: exact counts, tag layers, xref-bound layers
+    with their plain names, then layers, blocks, styles and object counts. Use the names
+    exactly as given. com: both drawings must be open."""
     b = _backend(backend)
-    return compare(b.inspect(source), b.inspect(sample), direction)
+    return compare(b.inspect(source), b.inspect(sample), direction, settings.get("tag_layer_pattern"))
 
 
-# Handoff between backends
+@mcp.tool()
+def list_entities(backend: BackendName, path: str | None = None, layers: list[str] | None = None,
+                  types: list[str] | None = None, text: str | None = None,
+                  area: list[float] | None = None, limit: int = 100) -> dict:
+    """Individual objects: handle, type, layer, position, plain text (TEXT, MTEXT, MULTILEADER,
+    block attributes), polyline points. Filters: layers and types (exact names, or * ?
+    wildcards), text (substring or wildcard), area [x0,y0,x1,y1]. Exact counts are given
+    even when the list is cut at limit."""
+    b = _backend(backend)
+    picked = entities.select(_records(b, path), layers, types, text, area)
+    return entities.listing(path or "active drawing", picked, limit)
+
+
+@mcp.tool()
+def compare_text(backend: BackendName, source: str, sample: str, layers: list[str] | None = None,
+                 direction: Direction = "source_to_sample") -> dict:
+    """Text of objects compared layer by layer: texts only in one drawing, with exact counts.
+    layers: exact names or wildcards; default the tag layers (settings: tag_layer_pattern)."""
+    b = _backend(backend)
+    pattern = layers or [settings.get("tag_layer_pattern")]
+    return text_report(entities.select(_records(b, source), pattern),
+                       entities.select(_records(b, sample), pattern), direction)
 
 
 @mcp.tool()
 def save_as_dxf(backend: BackendName, path: str, close_after: bool = True) -> str:
-    """Save the active AutoCAD drawing as DXF R2018 so ezdxf can work on it.
-    close_after closes it in AutoCAD so ezdxf is allowed to edit the file. com only."""
+    """com: save the active drawing as DXF R2018 for ezdxf; close_after closes it."""
     return _com_only(backend, "save_as_dxf").save_as_dxf(path, close_after)
 
 
 @mcp.tool()
 def open_in_autocad(backend: BackendName, path: str) -> str:
-    """Open (or activate, if already open) a DWG/DXF file in AutoCAD. com only."""
+    """com: open or switch to a DWG/DXF file in AutoCAD."""
     return _com_only(backend, "open_in_autocad").open_drawing(path)
 
 
-# LISP (com only)
+# LISP and commands (com only)
 
 
 @mcp.tool()
 def load_lisp(backend: BackendName, path: str) -> str:
-    """Load a .lsp file from AutoCAD's trusted LISP folder (lisp_dir in settings.ini) into the
-    active drawing. `path` is relative to that folder; files outside it are refused. com only."""
+    """com: load a .lsp file from the trusted LISP folder (path relative to it)."""
     return _com_only(backend, "load_lisp").load_lisp(job.routine_path(path))
 
 
 @mcp.tool()
 def run_lisp(backend: BackendName, expr: str) -> str:
-    """Evaluate a LISP expression in AutoCAD and return its result as text. com only."""
+    """com: evaluate a LISP expression; returns its result as text."""
     return _com_only(backend, "run_lisp").run_lisp(expr)
 
 
 @mcp.tool()
 def run_lisp_command(backend: BackendName, name: str) -> str:
-    """Run a loaded LISP command (defun c:NAME) and return its result as text. com only."""
+    """com: run a loaded LISP command (c:NAME, give NAME); returns its result as text."""
     return _com_only(backend, "run_lisp_command").run_lisp_command(name)
 
 
 @mcp.tool()
 def run_command(backend: BackendName, command: str, answers: list[str] | None = None,
                 path: str | None = None, timeout: float = 30.0) -> dict:
-    """Run an AutoCAD command (or a loaded LISP command by name) and answer its prompts in
-    order; "" is Enter. `path` picks the drawing (opened if needed), else the active one.
-    Cancels and raises if it still waits for input after `timeout` seconds. com only."""
+    """com: run a command and answer its prompts in order ("" = Enter). Cancelled with Esc if
+    still waiting after timeout seconds. path picks the drawing."""
     com = _com_only(backend, "run_command")
     if path:
         com.activate(path)
     return com.run_command(command, answers, timeout)
 
 
-# Job workflow. source_folder holds the source and sample drawings; drawing paths may be
-# relative to it. The source and sample are never edited: all work happens on copies.
+# Job workflow. source_folder holds the source and sample, which are never edited; the tools
+# write only into its work subfolder ("AI work").
 
 
 @mcp.tool()
@@ -118,10 +143,8 @@ def make_test_copy(backend: BackendName, source_folder: str, source: str, mode: 
                    sample: str | None = None, layers: list[str] | None = None,
                    blocks: list[str] | None = None, types: list[str] | None = None,
                    margin: float = 0.1) -> dict:
-    """Copy the source into <source folder>/test/, whole (mode="full") or cut to a part.
-    A part keeps the given layers/blocks/types (wildcards allowed) plus everything in their
-    area grown by `margin`. With none given, a part covers what the source → sample
-    comparison says the processing touches (needs `sample`). ezdxf parts need a DXF."""
+    """Copy the source into the job's test folder, whole or a part (the given layers, blocks,
+    types and their surroundings; without them, what the comparison with sample touches)."""
     return workflow.make_test_copy(_backend(backend), source_folder, source, mode, sample,
                                    layers, blocks, types, margin)
 
@@ -130,71 +153,89 @@ def make_test_copy(backend: BackendName, source_folder: str, source: str, mode: 
 def test_routine(backend: BackendName, source_folder: str, copy: str, routine: str, command: str,
                  answers: list[str] | None = None, sample: str | None = None,
                  run_twice: bool = True, timeout: float = 30.0, close_after: bool = False) -> dict:
-    """Test one routine from the trusted folder on a test copy (in test/). Checks: loads
-    cleanly (no load error, no helper or command name clashes), runs unattended, does the
-    job (changes move the copy towards `sample`), changes nothing else (incl. system
-    variables), safe to run twice. Failures are flagged, not blocking. Saves a report in
-    test/ and records the routine in lisp/. `command` is without c:. com only."""
+    """com: test a routine from the trusted folder on a test copy: loads cleanly, runs
+    unattended, does the job, changes nothing else, safe twice. Flags, never blocks."""
     return workflow.test_routine(_backend(backend), source_folder, copy, routine, command, answers,
                                  sample, run_twice, timeout, close_after)
 
 
 @mcp.tool()
 def save_recipe(source_folder: str, name: str, steps: list[dict], notes: str = "") -> dict:
-    """Save a recipe as a draft in <source folder>/recipe/<name>.yaml (clears any approval).
-    Each step is one of:
-      {"lisp": "MYCMD", "file": "mycmd.lsp", "answers": ["_ALL", ""]}
-      {"command": "-PURGE", "answers": ["_ALL", "*", "_N"]}
-      {"rename_layer": {"from": "OLD", "to": "NEW"}}
-      {"delete": {"layer": "TEMP*", "type": "TEXT"}}
-      {"change_layer": {"select": {"type": "DIMENSION"}, "to": "DIM"}}
-    Selectors use layer / type / block, each a wildcard or list. Use general rules, not
-    entity handles, so the recipe works on new sources too."""
+    """Save a recipe as a draft (clears approval). Steps: {"lisp": CMD, "file": f.lsp,
+    "answers": [...]}, {"command": C, "answers": [...]}, {"rename_layer": {"from", "to"}},
+    {"delete": selector}, {"change_layer": {"select": selector, "to": L}}. Selector keys:
+    layer, type, block. Use general rules, never handles."""
     return workflow.save_recipe(source_folder, name, steps, notes)
 
 
 @mcp.tool()
 def get_recipe(source_folder: str, name: str) -> dict:
-    """Read a recipe, its status (draft / tested / approved) and any routines changed since approval."""
+    """A recipe with its status (draft/tested/approved) and routines changed since approval."""
     return workflow.get_recipe(source_folder, name)
 
 
 @mcp.tool()
 def run_recipe(backend: BackendName, source_folder: str, name: str, drawing: str,
                mode: RunMode = "test", sample: str | None = None, timeout: float = 60.0) -> dict:
-    """Run a recipe on a copy of `drawing` (never on the drawing itself).
-    test: copy in test/, always allowed; marks a draft recipe tested.
-    full: needs an approved recipe whose routines are unchanged since approval; saves the
-    shop drawing as DWG 2018 in shop/. With `sample`, reports what still differs and what
-    the recipe does not cover. Every step's outcome and its routine's test result are
-    reported; failures are flagged, not blocking. com only."""
+    """com: run a recipe on a copy of drawing. test: always allowed. full: approved recipe
+    with unchanged routines only; saves the shop drawing. Reports every step."""
     return workflow.run_recipe(_backend(backend), source_folder, name, drawing, mode, sample, timeout)
 
 
 @mcp.tool()
 def approve_recipe(source_folder: str, name: str, approved_by: str) -> dict:
-    """Approve a tested recipe and lock its routines' hashes so a full run can go ahead.
-    Call this ONLY when the user has explicitly said they approve this recipe, and pass
-    their name. Never approve on your own judgement."""
+    """Only when the user explicitly approves, with their name. Never on your own judgement."""
     return workflow.approve_recipe(source_folder, name, approved_by)
 
 
 @mcp.tool()
 def check_conventions(backend: BackendName, drawing: str, sample: str) -> dict:
-    """Check a drawing (e.g. a shop drawing) against the sample's conventions: layers the
-    sample uses exist, no entities on layers the sample lacks, layer properties and text/dim
-    styles match, title-block attributes are filled. com: both are opened in AutoCAD."""
+    """Check a drawing against the sample's layers, styles and filled title-block attributes."""
     return workflow.check_conventions(_backend(backend), drawing, sample)
 
 
 @mcp.tool()
 def close_job(backend: BackendName, source_folder: str, name: str, shop_drawing: str,
               sample: str, closed_by: str, notes: str = "") -> dict:
-    """Final step: run the conventions check on the shop drawing and write job-summary.json
-    and job-summary.md in the source folder (recipe, routine versions, checks, open flags).
-    Call only when the user asks to close the job, and pass their name."""
+    """Only when the user asks: final check and job summary, with their name."""
     return workflow.close_job(_backend(backend), source_folder, name, shop_drawing, sample,
                               closed_by, notes)
+
+
+def _slim(schema):
+    """Drop what a model doesn't need from an input schema: titles, "null" alternatives of
+    optional arguments and null defaults. Arguments are still validated in full."""
+    if isinstance(schema, list):
+        return [_slim(s) for s in schema]
+    if not isinstance(schema, dict):
+        return schema
+    out = {k: _slim(v) for k, v in schema.items() if k != "title"}
+    alts = out.get("anyOf")
+    if alts:
+        kept = [a for a in alts if a != {"type": "null"}]
+        if len(kept) == 1:
+            out.pop("anyOf")
+            out.update(kept[0])
+    if "default" in out and out["default"] is None:
+        out.pop("default")
+    return out
+
+
+def _compact(fn):
+    """Return results as one line of JSON, once. By default they are pretty-printed and also
+    sent a second time as structured data, which a slow local model reads in full."""
+    def call(**kwargs):
+        result = fn(**kwargs)
+        return result if isinstance(result, str) else json.dumps(
+            result, separators=(",", ":"), ensure_ascii=False, default=str)
+    return call
+
+
+for _tool in mcp._tool_manager.list_tools():
+    _tool.parameters = _slim(_tool.parameters)
+    _tool.description = " ".join((_tool.description or "").split())
+    _tool.fn = _compact(_tool.fn)
+    _tool.fn_metadata.output_schema = None
 
 
 if __name__ == "__main__":

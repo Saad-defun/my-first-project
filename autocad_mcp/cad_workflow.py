@@ -370,7 +370,7 @@ def close_job(b, source_folder: str, name: str, shop_drawing: str, sample: str,
     full_runs = [x for x in job.reports(source_folder, "shop", "recipe-full") if x["recipe"] == name]
     run = full_runs[-1] if full_runs else None
     summary = {
-        "job": job.folder(source_folder),
+        "job": job.work(source_folder),
         "closed_by": closed_by,
         "closed_at": job.now(),
         "notes": notes,
@@ -400,7 +400,7 @@ def close_job(b, source_folder: str, name: str, shop_drawing: str, sample: str,
         open_flags.append("the shop drawing does not meet all of the sample's conventions")
     summary["open_flags"] = open_flags
 
-    root = job.folder(source_folder)
+    root = job.work(source_folder)
     with open(os.path.join(root, "job-summary.json"), "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False, default=str)
     with open(os.path.join(root, "job-summary.md"), "w", encoding="utf-8") as f:
@@ -412,7 +412,7 @@ def close_job(b, source_folder: str, name: str, shop_drawing: str, sample: str,
 def _summary_md(s: dict) -> str:
     approved = s["recipe"]["approved"] or {}
     lines = [
-        f"# Job summary: {os.path.basename(s['job'])}",
+        f"# Job summary: {os.path.basename(os.path.dirname(s['job']))}",
         "",
         f"- **Closed:** {s['closed_at']} by {s['closed_by']}",
         f"- **Recipe:** {s['recipe']['name']} ({s['recipe']['status']}"
