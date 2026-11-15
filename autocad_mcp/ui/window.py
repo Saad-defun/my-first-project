@@ -39,6 +39,24 @@ def _csv(text: str) -> list[str] | None:
     return items or None
 
 
+def _params(text: str) -> dict:
+    """Run parameters typed as "name=value; name2=value2"."""
+    out = {}
+    for part in text.split(";"):
+        if part.strip():
+            if "=" not in part:
+                raise ValueError(f"run parameter needs name=value: {part.strip()!r}")
+            k, v = part.split("=", 1)
+            out[k.strip()] = v.strip()
+    return out
+
+
+def _params_box() -> QLineEdit:
+    box = QLineEdit()
+    box.setPlaceholderText("run parameters, e.g. outfall_mh=<MH name>; another=value")
+    return box
+
+
 def _drawings(folder: str) -> list[str]:
     if not folder or not os.path.isdir(folder):
         return []
@@ -400,6 +418,7 @@ class RecipePage(Page):
         self.save = QPushButton("Save as draft")
         self.save.clicked.connect(self._save)
         self.drawing = QComboBox()
+        self.params = _params_box()
         self.go = QPushButton("Test-run on a copy")
         self.go.clicked.connect(self._test_run)
 
@@ -419,6 +438,7 @@ class RecipePage(Page):
         lv.addWidget(QLabel("Steps (YAML). Saving sets the recipe back to draft."))
         lv.addWidget(self.steps, 1)
         lv.addWidget(self.save)
+        lv.addWidget(self.params)
         lv.addLayout(run_row)
         split = QSplitter()
         split.addWidget(left)
@@ -462,8 +482,10 @@ class RecipePage(Page):
     def _test_run(self):
         b, folder, name = self.backend(), self.folder(), self.name.currentText().strip()
         drawing, sample, timeout = self.drawing.currentText(), self.sample(), self.timeout()
+        params = _params(self.params.text())
         self.run(f"test-running {name}",
-                 lambda: workflow.run_recipe(b, folder, name, drawing, "test", sample, timeout), self.go)
+                 lambda: workflow.run_recipe(b, folder, name, drawing, "test", sample, timeout, params),
+                 self.go)
 
 
 class ApprovePage(Page):
@@ -519,11 +541,13 @@ class RunPage(Page):
         super().__init__(main)
         self.name = QComboBox()
         self.drawing = QComboBox()
+        self.params = _params_box()
         self.go = QPushButton("Run on the full drawing")
         self.go.clicked.connect(self._run)
         form = QFormLayout()
         form.addRow("Approved recipe", self.name)
         form.addRow("Drawing", self.drawing)
+        form.addRow("Run parameters", self.params)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(QLabel("Works on a copy; the shop drawing is saved in shop/ in the format set in "
@@ -544,10 +568,12 @@ class RunPage(Page):
     def _run(self):
         b, folder, name = self.backend(), self.folder(), self.name.currentText()
         drawing, sample, timeout = self.drawing.currentText(), self.sample(), self.timeout()
+        params = _params(self.params.text())
         if QMessageBox.question(self, "Full run", f"Run '{name}' on {drawing}?") != QMessageBox.Yes:
             return
         self.run(f"running {name}",
-                 lambda: workflow.run_recipe(b, folder, name, drawing, "full", sample, timeout), self.go)
+                 lambda: workflow.run_recipe(b, folder, name, drawing, "full", sample, timeout, params),
+                 self.go)
 
 
 class ClosePage(Page):
@@ -625,6 +651,7 @@ class SettingsPage(Page):
         self.work_subfolder = QLineEdit()
         self.work_subfolder.setPlaceholderText("folder inside each job folder that the tools write into")
         self.tag_pattern = QLineEdit()
+        self.title_layer = QLineEdit()
         self.go = QPushButton("Save settings")
         self.go.clicked.connect(self._save)
         form = QFormLayout()
@@ -635,6 +662,7 @@ class SettingsPage(Page):
         form.addRow("Command time limit", self.timeout_box)
         form.addRow("Work subfolder", self.work_subfolder)
         form.addRow("Tag layers", self.tag_pattern)
+        form.addRow("Detail title layer", self.title_layer)
         self.mcp = QPlainTextEdit()
         self.mcp.setReadOnly(True)
         self.mcp.setMaximumHeight(140)
@@ -668,6 +696,7 @@ class SettingsPage(Page):
         self.timeout_box.setValue(float(s["timeout"]))
         self.work_subfolder.setText(s["work_subfolder"])
         self.tag_pattern.setText(s["tag_layer_pattern"])
+        self.title_layer.setText(s["detail_title_layer"])
         exe = sys.executable if getattr(sys, "frozen", False) else f"{sys.executable} {os.path.abspath(sys.argv[0])}"
         cmd = exe.replace("\\", "\\\\")
         self.mcp.setPlainText(
@@ -692,6 +721,7 @@ class SettingsPage(Page):
                 "timeout": self.timeout_box.value(),
                 "work_subfolder": self.work_subfolder.text().strip(),
                 "tag_layer_pattern": self.tag_pattern.text().strip(),
+                "detail_title_layer": self.title_layer.text().strip(),
             })
         except Exception as e:
             self.view.show_error(str(e))

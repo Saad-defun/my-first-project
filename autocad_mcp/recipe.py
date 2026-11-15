@@ -13,18 +13,29 @@ Step types (one per step; "answers" and "note" are optional on any step):
     - rename_layer: {from: OLD, to: NEW}         merges into NEW if it exists
     - delete: {layer: "TEMP*", type: TEXT}       a selector: layer / type / block
     - change_layer: {select: {type: DIMENSION}, to: DIM}
+    - lisp_call: GTAGA-core       call a LISP function directly (no prompts)
+      files: [gtag.lsp]           loaded first, in order ("file" for one)
+      args: ["{outfall_mh}"]      "{name}" = a run parameter, given when the recipe runs
+
+Run parameters keep job values (names, levels, coordinates) out of the recipe itself, so the
+same recipe runs on any source. Every save is also kept in recipe/history/, with who wrote it
+(the model or the user), so a model's draft and the user's corrected version stay side by side.
 """
 import os
 import re
+import shutil
 
 import yaml
 
 import job
 from backends.selection import FIELDS
 
-STEP_TYPES = ("lisp", "command", "rename_layer", "delete", "change_layer")
+STEP_TYPES = ("lisp", "lisp_call", "command", "rename_layer", "delete", "change_layer")
 STATUSES = ("draft", "tested", "approved")
 NAME_RE = r"[A-Za-z0-9_\-]+"
+FUNC_RE = r"[A-Za-z0-9_\-:]+"
+PARAM_RE = re.compile(r"\{([A-Za-z0-9_]+)\}")
+AUTHORS = ("model", "user")
 
 
 def path(source_folder: str, name: str) -> str:
@@ -58,17 +69,29 @@ def validate(steps) -> list[str]:
             errors.append(f"{where}: needs exactly one of {list(STEP_TYPES)}")
             continue
         t = types[0]
-        allowed = {t, "answers", "note"} | ({"file"} if t == "lisp" else set())
+        allowed = {t, "answers", "note"}
+        if t in ("lisp", "lisp_call"):
+            allowed |= {"file", "files"} | ({"args"} if t == "lisp_call" else set())
         if set(s) - allowed:
             errors.append(f"{where}: unexpected keys {sorted(set(s) - allowed)}")
         answers = s.get("answers", [])
         if not isinstance(answers, list) or not all(isinstance(a, str) for a in answers):
             errors.append(f"{where}: answers must be a list of strings")
+        if t in ("lisp", "lisp_call"):
+            if "file" in s and "files" in s:
+                errors.append(f"{where}: give file or files, not both")
+            files = step_files(s)
+            if not files or not all(isinstance(f, str) and f for f in files):
+                errors.append(f"{where}: {t} steps need the routine file(s) to load")
         if t == "lisp":
             if not isinstance(s["lisp"], str) or not re.fullmatch(NAME_RE, s["lisp"]):
                 errors.append(f"{where}: lisp must be a command name (without c:)")
-            if not isinstance(s.get("file"), str):
-                errors.append(f"{where}: lisp steps need the routine's file name")
+        elif t == "lisp_call":
+            if not isinstance(s["lisp_call"], str) or not re.fullmatch(FUNC_RE, s["lisp_call"]):
+                errors.append(f"{where}: lisp_call must be a function name")
+            args = s.get("args", [])
+            if not isinstance(args, list) or not all(isinstance(a, (str, int, float)) for a in args):
+                errors.append(f"{where}: args must be a list of text or numbers")
         elif t == "command":
             if not isinstance(s["command"], str) or not s["command"].strip():
                 errors.append(f"{where}: command must be text")
@@ -95,24 +118,65 @@ def load(source_folder: str, name: str) -> dict:
         return yaml.safe_load(f)
 
 
-def save(source_folder: str, name: str, recipe: dict) -> str:
+def save(source_folder: str, name: str, recipe: dict, event: str = "saved") -> str:
+    """Write the recipe, and keep a copy of this version in recipe/history/."""
     p = path(source_folder, name)
     with open(p, "w", encoding="utf-8") as f:
         yaml.safe_dump(recipe, f, sort_keys=False, allow_unicode=True)
+    history = os.path.join(os.path.dirname(p), "history")
+    os.makedirs(history, exist_ok=True)
+    who = recipe.get("author", "user")
+    shutil.copy2(p, os.path.join(history, f"{name}-{job.stamp()}-{event}-{who}.yaml"))
     return p
 
 
+def history(source_folder: str, name: str) -> list[str]:
+    """Saved versions of a recipe, oldest first (file names in recipe/history/)."""
+    folder = os.path.join(os.path.dirname(path(source_folder, name)), "history")
+    if not os.path.isdir(folder):
+        return []
+    return sorted(f for f in os.listdir(folder) if f.startswith(f"{name}-") and f.endswith(".yaml"))
+
+
+def step_files(step: dict) -> list:
+    """The routine files a lisp or lisp_call step loads, in order."""
+    if "files" in step:
+        return step["files"] if isinstance(step["files"], list) else []
+    return [step["file"]] if "file" in step else []
+
+
+def params(recipe: dict) -> list[str]:
+    """Run parameter names ("{name}") used in the recipe's answers and args."""
+    found = set()
+    for s in recipe["steps"]:
+        for v in [*s.get("answers", []), *s.get("args", [])]:
+            if isinstance(v, str):
+                found |= set(PARAM_RE.findall(v))
+    return sorted(found)
+
+
+def fill(value, values: dict):
+    """Put run parameter values into "{name}" placeholders."""
+    if not isinstance(value, str):
+        return value
+    missing = [p for p in PARAM_RE.findall(value) if p not in values]
+    if missing:
+        raise ValueError(f"run parameter(s) not given: {missing}")
+    return PARAM_RE.sub(lambda m: str(values[m.group(1)]), value)
+
+
 def routines(recipe: dict) -> list[str]:
-    return sorted({s["file"] for s in recipe["steps"] if "lisp" in s})
+    return sorted({f for s in recipe["steps"] if "lisp" in s or "lisp_call" in s for f in step_files(s)})
 
 
 def current_hashes(recipe: dict) -> dict:
-    """Routine file -> hash of the version now in the trusted folder (None if missing)."""
+    """Routine file -> hash of the version now in the trusted folder (None if missing, or if
+    the trusted folder is not set yet)."""
     out = {}
     for f in routines(recipe):
         try:
             out[f] = job.file_hash(job.routine_path(f))
-        except FileNotFoundError:
+        except (FileNotFoundError, RuntimeError):
             out[f] = None
     return out
 

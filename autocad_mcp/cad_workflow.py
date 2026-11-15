@@ -178,29 +178,49 @@ def test_routine(b, source_folder: str, copy: str, routine: str, command: str, a
 # Recipes
 
 
-def save_recipe(source_folder: str, name: str, steps: list, notes: str = "") -> dict:
-    """Write a recipe as a draft. Any earlier test result or approval is cleared."""
+def save_recipe(source_folder: str, name: str, steps: list, notes: str = "",
+                author: str = "user") -> dict:
+    """Write a recipe as a draft. Any earlier test result or approval is cleared. author is
+    "model" when the model saved it (through MCP) and "user" when the user did (the UI)."""
     errors = recipes.validate(steps)
     if errors:
         raise ValueError("recipe not saved: " + "; ".join(errors))
-    data = {"name": name, "status": "draft", "updated": job.now(), "notes": notes, "steps": steps}
-    path = recipes.save(source_folder, name, data)
+    if author not in recipes.AUTHORS:
+        raise ValueError(f"author must be one of {list(recipes.AUTHORS)}")
+    data = {"name": name, "status": "draft", "updated": job.now(), "author": author,
+            "notes": notes, "steps": steps}
+    path = recipes.save(source_folder, name, data, "draft")
     missing = [f for f, h in recipes.current_hashes(data).items() if h is None]
-    return {"recipe": path, "status": "draft", "steps": len(steps),
+    return {"recipe": path, "status": "draft", "author": author, "steps": len(steps),
+            "run_parameters": recipes.params(data),
             "routines_missing_from_trusted_folder": missing}
 
 
 def get_recipe(source_folder: str, name: str) -> dict:
     data = recipes.load(source_folder, name)
     data["routines_changed_since_approval"] = recipes.hash_changes(data)
+    data["run_parameters"] = recipes.params(data)
+    data["history"] = recipes.history(source_folder, name)
     return data
 
 
+def record_draft(source_folder: str, kind: str, text: str) -> dict:
+    """Keep a model's own answer (a method proposal, an explanation) in the job's drafts/
+    folder, so it can later be set beside the user's corrected version."""
+    if not re.fullmatch(COMMAND_RE, kind):
+        raise ValueError("kind may use letters, digits, _ and - only, e.g. method or recipe")
+    path = os.path.join(job.sub(source_folder, "drafts"), f"{kind}-{job.stamp()}-model.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    return {"draft": path, "characters": len(text)}
+
+
 def run_recipe(b, source_folder: str, name: str, drawing: str, mode: str = "test",
-               sample: str | None = None, timeout: float = 60.0) -> dict:
+               sample: str | None = None, timeout: float = 60.0, params: dict | None = None) -> dict:
     """Run a recipe on a copy of `drawing`. test: the copy goes to test/ and is always
     allowed. full: needs an approved recipe whose routines are unchanged; the result is
-    saved as a DWG 2018 shop drawing in shop/."""
+    saved as a DWG 2018 shop drawing in shop/. params fills the recipe's "{name}" run
+    parameters (job values such as an outfall MH name)."""
     com = _com(b, "run_recipe")
     if mode not in ("test", "full"):
         raise ValueError("mode must be 'test' or 'full'")
@@ -208,6 +228,10 @@ def run_recipe(b, source_folder: str, name: str, drawing: str, mode: str = "test
     errors = recipes.validate(r.get("steps"))
     if errors:
         raise ValueError("recipe is invalid: " + "; ".join(errors))
+    params = {k: str(v) for k, v in (params or {}).items()}
+    missing = [p for p in recipes.params(r) if p not in params]
+    if missing:
+        raise ValueError(f"run parameter(s) not given: {missing}")
     changed = recipes.hash_changes(r)
     cad = com.cad_info()
     warnings = []
@@ -236,18 +260,24 @@ def run_recipe(b, source_folder: str, name: str, drawing: str, mode: str = "test
         t = recipes.step_type(step)
         entry = {"step": i, "type": t, **step}
         try:
+            answers = [recipes.fill(a, params) for a in step.get("answers", [])] or None
+            if t in ("lisp", "lisp_call"):
+                files = [job.routine_path(f) for f in recipes.step_files(step)]
+                for file in files:
+                    if file not in loaded:
+                        com.load_lisp(file)
+                        loaded.add(file)
             if t == "lisp":
-                file = job.routine_path(step["file"])
-                if file not in loaded:
-                    com.load_lisp(file)
-                    loaded.add(file)
-                com.run_command(step["lisp"], step.get("answers"), timeout)
-                tested = job.latest_test(source_folder, step["file"], step["lisp"])
+                com.run_command(step["lisp"], answers, timeout)
+                tested = job.latest_test(source_folder, recipes.step_files(step)[0], step["lisp"])
                 entry["routine_test"] = tested or "not tested"
-                if tested and tested["sha256"] != job.file_hash(file):
+                if tested and tested["sha256"] != job.file_hash(files[0]):
                     entry["routine_test"]["note"] = "tested on a different version of the file"
+            elif t == "lisp_call":
+                args = [recipes.fill(a, params) for a in step.get("args", [])]
+                entry["result"] = com.call_lisp(step["lisp_call"], args, timeout)
             elif t == "command":
-                com.run_command(step["command"], step.get("answers"), timeout)
+                com.run_command(step["command"], answers, timeout)
             else:
                 entry["result"] = com.apply_rule(t, step[t])
             entry["ok"] = True
@@ -271,6 +301,7 @@ def run_recipe(b, source_folder: str, name: str, drawing: str, mode: str = "test
         "recipe_status": r.get("status"),
         "drawing": src,
         "output": saved,
+        "params": params,
         "cad": cad,
         "warnings": warnings,
         "ran": job.now(),
@@ -297,7 +328,7 @@ def run_recipe(b, source_folder: str, name: str, drawing: str, mode: str = "test
                           "steps_failed": report["steps_failed"],
                           "matches_sample": report.get("matches_sample"),
                           "cad": cad}
-        recipes.save(source_folder, name, r)
+        recipes.save(source_folder, name, r, "tested")
     report["note"] = "the result is left open in AutoCAD for review"
     return report
 
@@ -318,7 +349,7 @@ def approve_recipe(source_folder: str, name: str, approved_by: str) -> dict:
     r["approved"] = {"by": approved_by, "at": job.now(), "hashes": hashes, "cad": last.get("cad"),
                      "open_flags": {"steps_failed": last.get("steps_failed", []),
                                     "matches_sample": last.get("matches_sample")}}
-    recipes.save(source_folder, name, r)
+    recipes.save(source_folder, name, r, "approved")
     return {"recipe": name, "status": "approved", **r["approved"]}
 
 

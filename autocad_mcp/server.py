@@ -91,6 +91,15 @@ def compare_text(backend: BackendName, source: str, sample: str, layers: list[st
 
 
 @mcp.tool()
+def detail_layout(backend: BackendName, path: str | None = None, title_layer: str | None = None) -> dict:
+    """Cut-sheet details: each detail title (TEXT on the title layer, default from settings)
+    with position, left to right, the spacing between them and where the next one goes."""
+    b = _backend(backend)
+    layer = title_layer or settings.get("detail_title_layer")
+    return entities.layout(path or "active drawing", _records(b, path), layer)
+
+
+@mcp.tool()
 def save_as_dxf(backend: BackendName, path: str, close_after: bool = True) -> str:
     """com: save the active drawing as DXF R2018 for ezdxf; close_after closes it."""
     return _com_only(backend, "save_as_dxf").save_as_dxf(path, close_after)
@@ -162,24 +171,33 @@ def test_routine(backend: BackendName, source_folder: str, copy: str, routine: s
 @mcp.tool()
 def save_recipe(source_folder: str, name: str, steps: list[dict], notes: str = "") -> dict:
     """Save a recipe as a draft (clears approval). Steps: {"lisp": CMD, "file": f.lsp,
-    "answers": [...]}, {"command": C, "answers": [...]}, {"rename_layer": {"from", "to"}},
-    {"delete": selector}, {"change_layer": {"select": selector, "to": L}}. Selector keys:
-    layer, type, block. Use general rules, never handles."""
-    return workflow.save_recipe(source_folder, name, steps, notes)
+    "answers": [...]}, {"lisp_call": FN, "files": [...], "args": [...]}, {"command": C,
+    "answers": [...]}, {"rename_layer": {"from", "to"}}, {"delete": selector},
+    {"change_layer": {"select": selector, "to": L}}. Selector keys: layer, type, block.
+    Job values go in "{name}" run parameters, never in the steps."""
+    return workflow.save_recipe(source_folder, name, steps, notes, author="model")
 
 
 @mcp.tool()
 def get_recipe(source_folder: str, name: str) -> dict:
-    """A recipe with its status (draft/tested/approved) and routines changed since approval."""
+    """A recipe with its status, run parameters, saved versions and changed routines."""
     return workflow.get_recipe(source_folder, name)
 
 
 @mcp.tool()
+def record_draft(source_folder: str, kind: str, text: str) -> dict:
+    """Keep your own answer (e.g. kind "method") in the job's drafts folder for review."""
+    return workflow.record_draft(source_folder, kind, text)
+
+
+@mcp.tool()
 def run_recipe(backend: BackendName, source_folder: str, name: str, drawing: str,
-               mode: RunMode = "test", sample: str | None = None, timeout: float = 60.0) -> dict:
-    """com: run a recipe on a copy of drawing. test: always allowed. full: approved recipe
-    with unchanged routines only; saves the shop drawing. Reports every step."""
-    return workflow.run_recipe(_backend(backend), source_folder, name, drawing, mode, sample, timeout)
+               mode: RunMode = "test", sample: str | None = None, timeout: float = 60.0,
+               params: dict[str, str] | None = None) -> dict:
+    """com: run a recipe on a copy of drawing, with its run parameters. test: always allowed.
+    full: approved recipe with unchanged routines only; saves the shop drawing."""
+    return workflow.run_recipe(_backend(backend), source_folder, name, drawing, mode, sample,
+                               timeout, params)
 
 
 @mcp.tool()

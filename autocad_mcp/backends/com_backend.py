@@ -24,6 +24,9 @@ SAVE_TYPES = {
 AC_2018_DWG, AC_2018_DXF = SAVE_TYPES["2018"]
 RPC_E_CALL_REJECTED = -2147418111  # AutoCAD is busy
 NAME_RE = r"[A-Za-z0-9_\-]+"
+FUNC_RE = r"[A-Za-z0-9_\-:]+"
+RESULT_VAR = "*aitocad-result*"  # LISP variable holding the last result text
+CHUNK = 200                      # characters read back through USERS1 at a time
 
 # System variables a routine should leave as it found them
 SYSVARS = ("CLAYER", "CECOLOR", "CELTYPE", "TEXTSTYLE", "DIMSTYLE", "OSMODE", "ORTHOMODE",
@@ -76,6 +79,15 @@ def _norm(path: str) -> str:
 
 def _lisp_str(text: str) -> str:
     return '"' + text.replace("\\", "/").replace('"', '\\"') + '"'
+
+
+def _lisp_value(value) -> str:
+    """A Python value written as a LISP argument: numbers as they are, text quoted."""
+    if isinstance(value, bool):
+        return "T" if value else "nil"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def _lisp_list(text: str) -> list[str]:
@@ -206,7 +218,24 @@ class ComBackend(Backend):
                 raise TimeoutError("AutoCAD command did not finish (is it waiting for input?)")
             time.sleep(0.1)
 
+    def _ready(self, doc):
+        """Refuse to send anything while AutoCAD is busy: a command, script or dialog box is
+        active, or it does not answer at all (a modal dialog box blocks COM calls)."""
+        import pywintypes
+
+        try:
+            active = _retry(lambda: doc.GetVariable("CMDACTIVE"))
+        except pywintypes.com_error as e:
+            if e.hresult == RPC_E_CALL_REJECTED:
+                raise RuntimeError("AutoCAD is not answering; a dialog box may be open. "
+                                   "Close it and try again.") from e
+            raise
+        if active:
+            raise RuntimeError(f"AutoCAD is busy (CMDACTIVE={active}): a command, script or dialog "
+                               "is active. Finish or cancel it first; nothing was sent.")
+
     def _send(self, doc, text: str, timeout: float = 30.0):
+        self._ready(doc)
         _retry(lambda: doc.SendCommand(text))
         try:
             self._wait_idle(doc, timeout)
@@ -426,12 +455,32 @@ class ComBackend(Backend):
             raise RuntimeError(f"loading {os.path.basename(path)} failed: {result}")
         return os.path.abspath(path)
 
-    def run_lisp(self, expr: str, timeout: float = 30.0) -> str:
-        """Evaluate a LISP expression and return its result as text (via USERS1)."""
-        doc = self._doc()
+    def _users1(self, doc, expr: str, timeout: float) -> str:
         _retry(lambda: doc.SetVariable("USERS1", ""))
-        self._send(doc, f'(setvar "USERS1" (vl-princ-to-string {expr})) ', timeout)
+        self._send(doc, f'(setvar "USERS1" {expr}) ', timeout)
         return _retry(lambda: doc.GetVariable("USERS1"))
+
+    def run_lisp(self, expr: str, timeout: float = 30.0) -> str:
+        """Evaluate a LISP expression and return its result as text. The text is kept in a
+        LISP variable and read back through USERS1 in pieces, so long results are not cut."""
+        doc = self._doc()
+        self._send(doc, f"(setq {RESULT_VAR} (vl-princ-to-string {expr})) ", timeout)
+        size = int(self._users1(doc, f"(itoa (strlen {RESULT_VAR}))", timeout))
+        return "".join(self._users1(doc, f"(substr {RESULT_VAR} {i + 1} {CHUNK})", timeout)
+                       for i in range(0, size, CHUNK))
+
+    def call_lisp(self, function: str, args: list, timeout: float = 60.0) -> str:
+        """Call a loaded LISP function with arguments (no prompts) and return its result as
+        text. Raises with LISP's own message if the function fails."""
+        if not re.fullmatch(FUNC_RE, function):
+            raise ValueError(f"Invalid LISP function name: {function!r}")
+        quoted = " ".join(_lisp_value(a) for a in args)
+        result = self.run_lisp(
+            "((lambda (r) (if (vl-catch-all-error-p r) (strcat \"ERROR: \" (vl-catch-all-error-message r)) r))"
+            f" (vl-catch-all-apply '{function} (list {quoted})))", timeout)
+        if result.startswith("ERROR: "):
+            raise RuntimeError(f"{function} failed: {result[7:]}")
+        return result
 
     def run_lisp_command(self, name: str) -> str:
         if not re.fullmatch(NAME_RE, name):

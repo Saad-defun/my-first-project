@@ -1,0 +1,41 @@
+# Fixed test set for job 001 (CAD Files\001: SOURCE / SAMPLE, Civil 3D 2026).
+# TEST DATA ONLY: these values come from the job 001 sample and are used to score a model's
+# answer. They must never be copied into code, recipes or prompts.
+#
+# Score a recipe with:  python tests\score_recipe.py <recipe.yaml> --model <name> [--answer <reply.txt>]
+
+job: "001"
+
+# The sample's tag layers (compare_drawings -> tag_layers)
+tag_layers:
+  count: 16
+  names: ["0. TAG CL", "0. TAG CL260", "0. TAG FCFROM", "0. TAG FCFROMIL", "0. TAG FCSLOPE",
+          "0. TAG FIC", "0. TAG FROM1", "0. TAG FROM1IL", "0. TAG FROM2", "0. TAG FROM2IL",
+          "0. TAG HC", "0. TAG SLOPE1", "0. TAG SLOPE2", "0. TAG TO", "0. TAG TOIL",
+          "0. TAG TOSLOPE"]
+
+# Xref-bound layers whose objects the sample moved to the plain-name layer
+# (objects in source > 0, in sample 0). Exact names, as compare_drawings gives them.
+xref_moves:
+  "EM-GC-22-SE-XREF$0$C-SSWR-TEXT": "C-SSWR-TEXT"
+  "EM-GC-22-SE-XREF$0$HC TO HC": "HC TO HC"
+  "EM-GD-21-24-SEWER$0$SEWER TABLE TEXT": "SEWER TABLE TEXT"
+
+# Xref-bound layers the sample keeps as they are (must not be moved or deleted)
+xref_keep:
+  - "Road Layout$0$Xref EM-GC-22-ROAD NAME$0$EM-GC-22-CHAINAGE AND ROAD NAME$0$C-ROAD-CNTR-N"
+
+# The tag-filling step
+tag_fill:
+  function: GTAGA-core
+  param_required: true        # the MH name must be a {parameter}, not typed into the recipe
+
+# Text that must never appear in a recipe: job values (names, levels, coordinates)
+forbidden_values:
+  - 'GC22-HC-\d+'
+  - 'MH-\d+(/\d+)+-\d+'
+  - '\b\d{6,}(\.\d+)?\b'      # coordinates
+  - '\b\d{2}\.\d{3}\b'        # levels such as 60.678
+
+# Step order the recipe must keep (by kind): clean up, details, tags, purge
+order: [change_layer, details, tag_fill, purge]
