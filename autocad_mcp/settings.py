@@ -10,6 +10,9 @@ so the program stays portable. Created with the defaults on first use.
     work_subfolder    = folder inside each job folder that the tools write into ("AI work")
     tag_layer_pattern = layers reported as tag layers by the comparison ("0. TAG *")
     detail_title_layer = layer of the cut-sheet detail titles (one title per HC)
+    teach_dir   = folder of the teaching files shared by every job (glossary, standards);
+                  empty = a "teaching" folder beside this file
+    capture_file = the TCAP capture routine in the trusted LISP folder ("TCAP.lsp")
 """
 import configparser
 import os
@@ -28,6 +31,8 @@ DEFAULTS = {
     "work_subfolder": "AI work",
     "tag_layer_pattern": "0. TAG *",
     "detail_title_layer": "C-INW-PLN-ANNO-N-SEWER",
+    "teach_dir": "",
+    "capture_file": "TCAP.lsp",
 }
 
 
@@ -80,6 +85,8 @@ def validate(values: dict) -> list[str]:
         errors.append("tag_layer_pattern must not be empty")
     if not values["detail_title_layer"].strip():
         errors.append("detail_title_layer must not be empty")
+    if not values["capture_file"].strip().lower().endswith(".lsp"):
+        errors.append("capture_file must be a .lsp file name")
     return errors
 
 

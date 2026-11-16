@@ -10,6 +10,7 @@ import cad_workflow as workflow  # not "workflow": PyInstaller has a hook for a 
 import entities
 import job
 import settings
+import teach
 from backends import BACKENDS
 from compare import compare, compare_text as text_report
 
@@ -19,6 +20,8 @@ BackendName = Literal["com", "ezdxf"]
 Direction = Literal["source_to_sample", "sample_to_source", "both"]
 CopyMode = Literal["full", "part"]
 RunMode = Literal["test", "full"]
+TeachKind = Literal["task", "rules", "glossary", "standards"]
+CaptureAction = Literal["start", "status", "stop"]
 
 
 def _backend(name: str):
@@ -169,13 +172,15 @@ def test_routine(backend: BackendName, source_folder: str, copy: str, routine: s
 
 
 @mcp.tool()
-def save_recipe(source_folder: str, name: str, steps: list[dict], notes: str = "") -> dict:
+def save_recipe(source_folder: str, name: str, steps: list[dict], notes: str = "",
+                teaching: list[TeachKind] | None = None) -> dict:
     """Save a recipe as a draft (clears approval). Steps: {"lisp": CMD, "file": f.lsp,
     "answers": [...]}, {"lisp_call": FN, "files": [...], "args": [...]}, {"command": C,
     "answers": [...]}, {"rename_layer": {"from", "to"}}, {"delete": selector},
     {"change_layer": {"select": selector, "to": L}}. Selector keys: layer, type, block.
-    Job values go in "{name}" run parameters, never in the steps."""
-    return workflow.save_recipe(source_folder, name, steps, notes, author="model")
+    Job values go in "{name}" run parameters, never in the steps. teaching: the teaching
+    files this recipe was built from (task, rules, glossary, standards)."""
+    return workflow.save_recipe(source_folder, name, steps, notes, author="model", teaching=teaching)
 
 
 @mcp.tool()
@@ -218,6 +223,59 @@ def close_job(backend: BackendName, source_folder: str, name: str, shop_drawing:
     """Only when the user asks: final check and job summary, with their name."""
     return workflow.close_job(_backend(backend), source_folder, name, shop_drawing, sample,
                               closed_by, notes)
+
+
+# Teaching: learning a task from a recording of the user doing it, and keeping what was
+# learned in files (see teach.py).
+
+
+@mcp.tool()
+def get_selection(backend: BackendName, limit: int = 100) -> dict:
+    """com: the objects the user has selected in AutoCAD right now (or, if none, the previous
+    selection): handle, type, layer, text. Ask the user to select, then read this."""
+    result = _com_only(backend, "get_selection").selection()
+    return entities.listing("active drawing", result["entities"], limit) | {"source": result["source"]}
+
+
+@mcp.tool()
+def point_at(backend: BackendName, handles: list[str], zoom: bool = True) -> dict:
+    """com: zoom AutoCAD to these objects and grip-select them, so the user sees which ones
+    you mean when you ask about them."""
+    return _com_only(backend, "point_at").point_at(handles, zoom)
+
+
+@mcp.tool()
+def capture(backend: BackendName, action: CaptureAction, folder: str = "") -> dict:
+    """com: TCAP capture of the user's work in the active drawing: start (folder: empty =
+    "recording" beside the drawing), status, stop. Loads TCAP.lsp from the trusted folder."""
+    return teach.capture(_com_only(backend, "capture"), action, folder)
+
+
+@mcp.tool()
+def read_recording(source_folder: str | None = None, folder: str = "recording",
+                   step: int | None = None, limit: int = 50) -> dict:
+    """A TCAP recording as steps, one per save: commands run, objects selected, objects
+    added / changed / deleted with layer and text. folder: absolute, or relative to
+    source_folder. step: one step in full. Reconstruct the task from this, then ask the user
+    only what it leaves open."""
+    return teach.read_recording(source_folder, folder, step, limit)
+
+
+@mcp.tool()
+def teach_read(source_folder: str | None = None) -> dict:
+    """The teaching files: shared glossary (the user's terms and how to recognise them in a
+    drawing) and standards (rules on every job); with source_folder also the job's task page
+    and rules. Read them before working on a drawing."""
+    return teach.read(source_folder)
+
+
+@mcp.tool()
+def teach_write(kind: TeachKind, text: str, source_folder: str | None = None) -> dict:
+    """Write a teaching file (whole text, Markdown): task (the task page: what it is, what it
+    touches, leaves alone, checks) or rules for this job (source_folder needed); glossary or
+    standards shared by every job. Earlier versions are kept. Write what the user confirmed,
+    and your own draft marked as such."""
+    return teach.write(kind, text, source_folder, author="model")
 
 
 def _slim(schema):

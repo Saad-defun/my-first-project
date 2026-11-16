@@ -7,6 +7,7 @@ import re
 import shutil
 
 import job
+import teach
 import recipe as recipes
 import settings
 from compare import compare, diff, diff_keys, involved
@@ -179,16 +180,22 @@ def test_routine(b, source_folder: str, copy: str, routine: str, command: str, a
 
 
 def save_recipe(source_folder: str, name: str, steps: list, notes: str = "",
-                author: str = "user") -> dict:
+                author: str = "user", teaching: list | None = None) -> dict:
     """Write a recipe as a draft. Any earlier test result or approval is cleared. author is
-    "model" when the model saved it (through MCP) and "user" when the user did (the UI)."""
+    "model" when the model saved it (through MCP) and "user" when the user did (the UI).
+    teaching names the teaching files (task, rules, glossary, standards) it was built from."""
     errors = recipes.validate(steps)
     if errors:
         raise ValueError("recipe not saved: " + "; ".join(errors))
     if author not in recipes.AUTHORS:
         raise ValueError(f"author must be one of {list(recipes.AUTHORS)}")
+    unknown = sorted(set(teaching or []) - set(teach.KINDS))
+    if unknown:
+        raise ValueError(f"teaching must name {sorted(teach.KINDS)}, not {unknown}")
     data = {"name": name, "status": "draft", "updated": job.now(), "author": author,
             "notes": notes, "steps": steps}
+    if teaching:
+        data["teaching"] = list(dict.fromkeys(teaching))
     path = recipes.save(source_folder, name, data, "draft")
     missing = [f for f, h in recipes.current_hashes(data).items() if h is None]
     return {"recipe": path, "status": "draft", "author": author, "steps": len(steps),

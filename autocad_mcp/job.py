@@ -10,6 +10,7 @@ drawings: everything goes in one work subfolder, created on first use.
             recipe/   the job's recipes
             shop/     shop drawings and the reports of full runs
             drafts/   the model's own drafts, kept beside the user's corrected versions
+            teach/    the task page and the job's rules (see teach.py)
             job-summary.json / .md
 """
 import hashlib
@@ -21,7 +22,7 @@ import time
 
 import settings
 
-SUBFOLDERS = ("lisp", "test", "recipe", "shop", "drafts")
+SUBFOLDERS = ("lisp", "test", "recipe", "shop", "drafts", "teach")
 LISP_DIR_ENV = "AUTOCAD_MCP_LISP_DIR"
 
 

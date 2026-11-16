@@ -316,6 +316,39 @@ class ComBackend(Backend):
         doc = self._doc()
         return {n: _retry(lambda n=n: doc.GetVariable(n)) for n in names}
 
+    # Teaching: what the user has selected, and pointing at objects
+
+    def selection(self) -> dict:
+        """The objects selected in AutoCAD right now (grips, no command active), or when
+        nothing is gripped, the previous selection set. One record per object."""
+        doc = self._doc()
+        self._wait_idle(doc)
+        source = "pickfirst"
+        ss = _retry(lambda: doc.PickfirstSelectionSet)
+        if _retry(lambda: ss.Count) == 0:
+            source = "previous"
+            ss = _retry(lambda: doc.ActiveSelectionSet)
+        records = [_record(_retry(lambda i=i: ss.Item(i))) for i in range(_retry(lambda: ss.Count))]
+        return {"source": source, "count": len(records), "entities": records}
+
+    def point_at(self, handles: list[str], zoom: bool = True) -> dict:
+        """Grip-select the objects with these handles in AutoCAD, zooming to them first, so
+        the user sees which objects are meant. Returns which handles were found."""
+        for h in handles:
+            if not re.fullmatch(r"[0-9A-Fa-f]+", h):
+                raise ValueError(f"not a handle: {h!r}")
+        quoted = " ".join(_lisp_str(h.upper()) for h in handles)
+        zoom_code = '(command "_.ZOOM" "_O" ss "") (command "_.ZOOM" "0.8x")' if zoom else ""
+        found = self.run_lisp(
+            "((lambda (hs / found ss) "
+            "(setq found (vl-remove-if-not '(lambda (h) (handent h)) hs)) "
+            "(setq ss (ssadd)) (foreach h found (ssadd (handent h) ss)) "
+            f"(if found (progn {zoom_code} (sssetfirst nil ss))) found) "
+            f"(list {quoted}))")
+        got = [h.strip('"').upper() for h in _lisp_list(found)]
+        return {"found": got, "missing": [h.upper() for h in handles if h.upper() not in got],
+                "zoomed": bool(got) and zoom}
+
     # Drawings
 
     def activate(self, path: str):
