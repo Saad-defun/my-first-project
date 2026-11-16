@@ -703,7 +703,7 @@ class SettingsPage(Page):
             "Claude Code:\n"
             f"  claude mcp add autocad -- {exe} --mcp\n\n"
             "Claude Desktop (claude_desktop_config.json):\n"
-            f'  {{"mcpServers": {{"autocad": {{"command": "{cmd}", "args": ["--mcp"]}}}}}}'
+            f'  {{"mcpServers": {{"aitocad": {{"command": "{cmd}", "args": ["--mcp"]}}}}}}'
         )
 
     def _browse(self):

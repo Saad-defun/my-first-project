@@ -13,7 +13,7 @@ import settings
 from backends import BACKENDS
 from compare import compare, compare_text as text_report
 
-mcp = FastMCP("autocad")
+mcp = FastMCP("aitocad")
 
 BackendName = Literal["com", "ezdxf"]
 Direction = Literal["source_to_sample", "sample_to_source", "both"]

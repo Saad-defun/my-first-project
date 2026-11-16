@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "aitocad": {
+      "command": "python",
+      "args": ["autocad_mcp/app.py", "--mcp"],
+      "cwd": "D:/Typical/Coding/Code/AI to CAD"
+    }
+  }
+}
